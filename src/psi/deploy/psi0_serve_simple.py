@@ -112,6 +112,8 @@ class Server:
                         pad_to_len(states.numpy(), self.maxmin.pad_state_dim, dim=1)[0]
                     )
                 ).to(self.device)
+            else:
+                states = states.to(self.device)
 
             if not self.enable_rtc:
                 raw_pred_actions = self.model.predict_action(

@@ -45,6 +45,7 @@ MIN_EXEC_HORIZON = 15         # == s_min # TODO: should match D_INIT, ideally s_
 DELAY_BUFFER_SIZE = 6        # == delay_buffer_size
 D_INIT = 6                   # == d_init # TODO: placeholder, needs calculation
 CTRL_PERIOD_SEC = 1. / 30       # 30Hz
+RTC_MAX_DELAY = 8
 
 
 
@@ -120,7 +121,7 @@ class RealTimeChunkController:
                     #
 
                     o   = copy.deepcopy(self.o_cur)
-                    d   = max(self.Q)
+                    d = min(max(self.Q), RTC_MAX_DELAY - 1)
                     # A_prev = copy.deepcopy(torch.cat([self.A_cur[s:, :], torch.zeros((s, self.A_cur.shape[1]), device=self.A_cur.device, dtype=self.A_cur.dtype)], dim=0)) # (H, D)
                     A_prev = np.concatenate([copy.deepcopy(self.A_cur[s:, :]), np.zeros((s, self.A_cur.shape[1]), dtype=self.A_cur.dtype)], axis=0) # (H, D)
 
@@ -151,7 +152,7 @@ class RealTimeChunkController:
                     num_inference_steps = 8,
                     prev_actions=torch.from_numpy(A_prev[np.newaxis, :, :]).to(self.device), # (H, D) -> (1, H, D)
                     inference_delay=d,
-                    max_delay=8
+                    max_delay=RTC_MAX_DELAY
                 )[0].float().detach().cpu().numpy() # (1, H, D) -> (H, D)
         return A_new
     
@@ -292,9 +293,18 @@ class Server:
 
         # TODO support image history
         # img dict: {"video": np.array(...).shape(480, 640, 3)}
+        image_keys = getattr(
+            self.launch_cfg.data.transform.repack,
+            "image_keys",
+            None,
+        )
+        if not image_keys:
+            image_keys = list(image_dict.keys())
         imgs = {}
-        for cam_idx, img_key in enumerate(self.launch_cfg.data.transform.repack.image_keys):
-            imgs[f"cam{cam_idx}"] = Image.fromarray(np.clip(image_dict[img_key], 0, 255).astype(np.uint8))
+        for cam_idx, img_key in enumerate(image_keys):
+            imgs[f"cam{cam_idx}"] = Image.fromarray(
+                np.clip(image_dict[img_key], 0, 255).astype(np.uint8)
+            )
         
         hand_joints = state_dict["hand_joints"].copy() # shape (14,)
         arm_joints = state_dict["arm_joints"].copy() # shape (14,)
@@ -302,11 +312,10 @@ class Server:
         tmp_torso_height = np.array([0.75], dtype=np.float32)
         obs = np.concatenate([hand_joints, arm_joints, tmp_torso_rpy, tmp_torso_height], axis=-1) # (32,)
 
-        # normalize states
-        assert self.maxmin.normalize_state, "check"
         if self.maxmin.pad_state_dim != len(obs):
             obs = pad_to_len(obs, self.maxmin.pad_state_dim, dim=0)[0]
-        obs = self.maxmin.normalize_state_func(obs) # shape (32,)
+        if self.maxmin.normalize_state:
+            obs = self.maxmin.normalize_state_func(obs) # shape (32,)
         obs = obs[np.newaxis, np.newaxis, :] # (32,) -> (1, 1, 32)
 
 
