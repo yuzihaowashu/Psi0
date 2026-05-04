@@ -86,7 +86,19 @@ class RealTimeChunkController:
         self._infer_th.start()
 
     def replace_prev_actions_to_obs(self, o, previous_rpy, previous_height):
-        o['obs'] = np.concatenate([o['obs'][:, :, :28], previous_rpy[np.newaxis, np.newaxis, :], previous_height[np.newaxis, np.newaxis, :], o['obs'][:, :, 32:]], axis=-1) # (1, 1, 28) -> (1, 1, 32)
+        if previous_height.shape[-1] > 0:
+            replacement = np.concatenate([previous_rpy, previous_height], axis=-1)
+            tail_start = 32
+        else:
+            # The G1 bottle checkpoints predict 31D actions:
+            # 14 hand + 14 arm + 3 torso rpy. Preserve obs[31:] as-is.
+            replacement = previous_rpy
+            tail_start = 31
+        o['obs'] = np.concatenate([
+            o['obs'][:, :, :28],
+            replacement[np.newaxis, np.newaxis, :],
+            o['obs'][:, :, tail_start:],
+        ], axis=-1)
         return o
 
         

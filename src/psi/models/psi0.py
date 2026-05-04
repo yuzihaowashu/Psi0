@@ -1,5 +1,6 @@
 import os
 import copy
+import gc
 from tqdm import tqdm
 from typing import List, Optional, Tuple, Union, Dict, Any
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -1528,7 +1529,14 @@ class Psi0Model(nn.Module):
         # init empty vlm backbone from config only (skip loading base pretrained weights)
         vlm_config = AutoConfig.from_pretrained(QWEN3VL_VARIANT)
         vlm_config._attn_implementation = "flash_attention_2"
-        vlm_model = Qwen3VLForConditionalGeneration(vlm_config)
+        previous_default_dtype = torch.get_default_dtype()
+        try:
+            # Avoid constructing the 2B VLM in fp32 and then duplicating memory
+            # while converting it to bf16 during checkpoint loading.
+            torch.set_default_dtype(torch.bfloat16)
+            vlm_model = Qwen3VLForConditionalGeneration(vlm_config)
+        finally:
+            torch.set_default_dtype(previous_default_dtype)
         vlm_model = vlm_model.to(dtype=torch.bfloat16) # type: ignore
 
         vlm_state_dict = {}
@@ -1551,6 +1559,8 @@ class Psi0Model(nn.Module):
 
         vlm_model.load_state_dict(vlm_state_dict, strict=True)
         overwatch.info("loaded vlm_backbone checkpoint successfully.")
+        del vlm_state_dict
+        gc.collect()
 
         # init hfm-together model with vlm backbone
         model = Psi0Model(
@@ -1569,6 +1579,9 @@ class Psi0Model(nn.Module):
                 assert False, "check here"
         model.action_header.load_state_dict(action_head_state_dict, strict=True)
         overwatch.info("loaded action head checkpoint successfully.")
+        del action_head_state_dict
+        del state_dict
+        gc.collect()
 
         # load necessary modules
         model.vlm_processor = AutoProcessor.from_pretrained(QWEN3VL_VARIANT)
